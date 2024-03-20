@@ -62,10 +62,28 @@ fn main() {
     
     let git_status_output = get_command_output(git_status, "git status");
 
-    println!("{git_status_output:#?}");
-    // if !status_message.contains("Your branch is up to date") {
+    if !git_status_output.contains("Your branch is up to date") {
+        let git_pull = Command::new("git")
+            .arg("pull")
+            .current_dir("/opt/projects/ip_updater")
+            .output();
+        let git_pull_output = get_command_output(git_pull, "git pull");
+        let cron_stop = Command::new("sudo")
+            .arg("systemctl")
+            .arg("stop")
+            .arg("cron.service")
+            .current_dir("/opt/projects/ip_updater")
+            .output();
+        let cron_stop_output = get_command_output(cron_stop, "cron stop");
+        let cargo_build = Command::new("cargo")
+            .arg("build")
+            .arg("--release")
+            .current_dir("/opt/projects/ip_updater")
+            .output();
+        let cargo_build_output = get_command_output(cargo_build, "cargo build");
+        println!("{git_pull_output:#?}");
 
-    // }
+    }
     
     // let mut error_file = OpenOptions::new()
     //     .create(true)
