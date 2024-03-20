@@ -19,45 +19,53 @@ fn log_error_to_file_and_panic(error_message: &str) -> () {
     panic!("{}", error_message);
 }
 
-fn get_command_message(command_output: Result<Output>, command_name: &str) -> String {
+fn get_command_output<E>(command_output: Result<Output, E>, command_name: &str) -> String {
     let command_output = match command_output {
         Ok(output) => output
         , _ => {
             log_error_to_file_and_panic(
                 format!(
                     "Error when Rust runs the command {command_name}"
-                )
+                ).as_str()
             );
-            panic() // Line will never be reached as the above function ends in a panic
-        }
-    let status_code = match command_output {
-        
-    }
-    let status_message = match git_status {
-        Ok(output) => match String::from_utf8(output.stdout) {
-            Ok(output_string) => output_string
-            , _ => {
-                log_error_to_file_and_panic("Converting git status process output to string from bytes");
-                panic() // Line will never be reached as the above function ends in a panic
-            }
-        }
-        , _ => {
-            log_error_to_file_and_panic("Error when runing git status");
-            panic() // Line will never be reached as the above function ends in a panic
+            panic!() // Line will never be reached as the above function ends in a panic
         }
     };
+    if command_output.status.success() == true {
+        let output_message = match String::from_utf8(command_output.stdout) {
+            Ok(output_string) => output_string
+            , _ => {
+                log_error_to_file_and_panic(
+                    format!(
+                    "Could not convert the output to string for command {command_name}"
+                    ).as_str()
+                );
+                    panic!() // Line will never be reached as the above function ends in a panic
+            }
+        };
+        output_message
+    } else {
+        log_error_to_file_and_panic(
+            format!(
+            "The command {command_name} did not finish successfully"
+            ).as_str()
+        );
+        panic!() // Line will never be reached as the above function ends in a panic
+    }
 }
 
 fn main() {
     let git_status = Command::new("git")
         .arg("status")
-        .current_dir("/opt/projects")
+        .current_dir("/opt/projects/ip_updater")
         .output();
     
-    println!("{status_message:#?}");
-    if !status_message.contains("Your branch is up to date") {
+    let git_status_output = get_command_output(git_status, "git status");
 
-    }
+    println!("{git_status_output:#?}");
+    // if !status_message.contains("Your branch is up to date") {
+
+    // }
     
     // let mut error_file = OpenOptions::new()
     //     .create(true)
