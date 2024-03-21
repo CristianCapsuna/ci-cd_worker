@@ -75,6 +75,16 @@ fn main() {
             .current_dir("/opt/projects/ip_updater")
             .output();
         let cron_stop_output = get_command_output(cron_stop, "cron stop");
+        let cron_status = Command::new("sudo")
+            .arg("systemctl")
+            .arg("status")
+            .arg("cron.service")
+            .current_dir("/opt/projects/ip_updater")
+            .output();
+        let cron_status_output = get_command_output(cron_status, "cron status");
+        if cron_status_output.contains("Active: inactive (dead)") {
+            
+        }
         let cargo_build = Command::new("cargo")
             .arg("build")
             .arg("--release")
