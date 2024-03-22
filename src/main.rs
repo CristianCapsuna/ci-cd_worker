@@ -1,8 +1,12 @@
-use std::process::Command;
-use std::fs::OpenOptions;
-use std::io::Write;
+use std::{
+    process::Command
+    , fs::OpenOptions
+    , io::Write
+    , process::Output
+    , time::Duration
+    , thread::sleep
+};
 use chrono::Local;
-use std::process::Output;
 
 fn log_error_to_file_and_panic(error_message: &str) -> () {
     let error_file_name = "error.txt";
@@ -82,8 +86,8 @@ fn main() {
             .current_dir("/opt/projects/ip_updater")
             .output();
         let cron_status_output = get_command_output(cron_status, "cron status");
-        if cron_status_output.contains("Active: inactive (dead)") {
-            
+        if !cron_status_output.contains("Active: inactive (dead)") {
+            sleep(Duration(0.5));
         }
         let cargo_build = Command::new("cargo")
             .arg("build")
