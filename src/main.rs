@@ -118,18 +118,15 @@ fn main() {
         let logger_name = format!("ci-cd_worker::{project_name}");
         let logger_name_str = logger_name.as_str();
         info!(target: logger_name_str, "Beginning update for project {project_name}.");
-        let git_fetch = construct_command_and_get_output("git fetch --all", &config.source_code_path, project_name);
-        let _ = get_command_stdout(git_fetch, vec![0], "git fetch", project_name);
+        let _ = construct_command_and_get_output("git fetch --all", &config.source_code_path, project_name);
         let git_status = construct_command_and_get_output("git status", &config.source_code_path, project_name);
         let git_status_output = get_command_stdout(git_status, vec![0], "git status", project_name);
         if !git_status_output.contains("Your branch is up to date") {
-            let git_pull = construct_command_and_get_output("git pull", &config.source_code_path, project_name);
-            let _ = get_command_stdout(git_pull, vec![0], "git pull", project_name);
+            let _ = construct_command_and_get_output("git pull", &config.source_code_path, project_name);
             info!(target: logger_name_str, "Pulled latest changes. Attempting to stop cron.");
             match &config.release_bin_storage_path {
                 Some(release_bin_storage_path) => {
-                    let cron_stop = construct_command_and_get_output("sudo systemctl stop cron.service", &config.source_code_path, project_name);
-                    let _ = get_command_stdout(cron_stop, vec![0], "cron stop", project_name);
+                    let _ = construct_command_and_get_output("sudo systemctl stop cron.service", &config.source_code_path, project_name);
                     let cron_status_command = construct_command_and_get_output("sudo systemctl status cron.service", &config.source_code_path, project_name);
                     let mut cron_status_output = get_command_stdout(cron_status_command, vec![0, 3], "cron status after shutting down", project_name);
                     let loop_start_time = Instant::now();
@@ -145,8 +142,7 @@ fn main() {
                         panic!()
                     }
                     info!(target: logger_name_str, "Cron has stopped. Attempting build.");
-                    let cargo_build = construct_command_and_get_output("cargo build --release", &config.source_code_path, project_name);
-                    let _ = get_command_stdout(cargo_build, vec![0], "cargo build", project_name);
+                    let _ = construct_command_and_get_output("cargo build --release", &config.source_code_path, project_name);
                     info!(target: logger_name_str, "Build done. Attempting to move the binary to it's new home.");
                     let binary_name_split = &config.source_code_path.split('/');
                     let mut count = 0;
@@ -159,11 +155,9 @@ fn main() {
                     }
                     let move_command = format!("mv target/release/{binary_name} {release_bin_storage_path}/{project_name}");
                     let move_command_str = move_command.as_str();
-                    let move_executor = construct_command_and_get_output(move_command_str, &config.source_code_path, project_name);
-                    let _ = get_command_stdout(move_executor, vec![0], "mv", project_name);
+                    let _ = construct_command_and_get_output(move_command_str, &config.source_code_path, project_name);
                     info!(target: logger_name_str, "Move finished. Attempting to start cron.");
-                    let cron_start = construct_command_and_get_output("sudo systemctl start cron.service", &config.source_code_path, project_name);
-                    let _ = get_command_stdout(cron_start, vec![0], "cron start", project_name);
+                    let _ = construct_command_and_get_output("sudo systemctl start cron.service", &config.source_code_path, project_name);
                     let cron_status_command = construct_command_and_get_output("sudo systemctl status cron.service", &config.source_code_path, project_name);
                     let mut cron_status_output = get_command_stdout(cron_status_command, vec![0, 3], "cron status after shutting down", project_name);
                     let loop_start_time = Instant::now();
