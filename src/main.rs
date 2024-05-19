@@ -87,10 +87,9 @@ fn main() {
         "0" => LevelFilter::Off,
         "1" => LevelFilter::Error,
         "2" => LevelFilter::Warn,
-        "3" => LevelFilter::Info,
         "4" => LevelFilter::Debug,
         "5" => LevelFilter::Trace,
-        _ => LevelFilter::Info, // Default to 'info' if the value is unrecognized
+        _ => LevelFilter::Info,
     };
 
     // Opening the logger yaml config file
@@ -104,7 +103,7 @@ fn main() {
     let log_file_appender = FileAppender::builder()
         .encoder(Box::new(PatternEncoder::new(file_log_output_format)))
         .build(format!("{logs_root_location}{main_log_file_name}"))
-        .expect(format!("Could not create the file appender").as_str());
+        .expect("Could not create the file appender");
     // Starting the logger configuration by adding the console logger
     let mut incremental_logger_config = Config::builder()
         .appender(Appender::builder().build("stdout", Box::new(stdout)))
@@ -125,7 +124,6 @@ fn main() {
             .logger(Logger::builder()
                 .appender("stdout")
                 .appender(project_name)
-                .additive(false)
                 .build(logger_name_str, level_filter)
             )
     };
