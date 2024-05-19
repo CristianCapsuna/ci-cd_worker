@@ -1,18 +1,18 @@
 use std::{
     process::Command
-    , process::Output
     , time::Duration
     , thread::sleep
     , fs::File
     , collections::HashMap
     , time::Instant
 };
-use log::{info, error, LevelFilter};
+use log::{debug, info, error, LevelFilter};
 use log4rs::append::{console::ConsoleAppender, file::FileAppender};
 use log4rs::encode::pattern::PatternEncoder;
 use log4rs::config::{Appender, Config, Logger, Root};
 use serde_yaml;
 use serde::Deserialize;
+use std::env;
 
 #[derive (Deserialize, Debug)]
 struct loop_config {
@@ -20,164 +20,292 @@ struct loop_config {
     , release_bin_storage_path: Option<String>
 }
 
-
-fn construct_command_and_get_output(command_string: &str, project_location: &str, project_name: &str) -> Output{
-    let target_string = format!("ci-cd_worker::{project_name}");
-    let target_str = target_string.as_str();
-    if command_string == "" {
-        error!(target: target_str, "Command given is an empty string. What am I supposed to do with this, bro?");
-        panic!()
-    }
+fn command_and_output(
+    command_string: &str
+    , project_location: &str
+    , acceptable_status_codes: Vec<i32>
+    , logger_name_str: &str
+) -> Result<String, ()> {
     let mut command_string_split = command_string.split(' ');
-    // the below uses an unwrap because if the string is not empty, which is checked above,
-    // then the returned value of the next() operation is at minimum Some("")
-    let mut command_construct = Command::new(command_string_split.next().unwrap());
+    let command = match command_string_split.next() {
+        Some(string) => string
+        , None => {
+            let err_message = "Empty command was given".to_string();
+            error!(target: logger_name_str, "{err_message}");
+            panic!("{err_message}")
+        }
+    };
+    let mut command = Command::new(command);
     for elem in command_string_split {
-        command_construct.arg(elem);
+        command.arg(elem);
     };
-    command_construct.current_dir(project_location);
-    let command_output = command_construct.output();
-    match command_output {
-        Ok(output) => return output
-        , _ => {
-            error!(target: target_str, "Error when running command created from command string {command_string}.");
-            panic!()
+    command.current_dir(project_location);
+    match command.output() {
+        Ok(output) => {
+            let output_message = String::from_utf8(output.stdout).expect("Terminal output is always valid utf8");
+            let output_error = String::from_utf8(output.stderr).expect("Terminal output is always valid utf8");
+            let output_status_code = match output.status.code() {
+                Some(code) => code
+                , _ => {
+                    error!(target: logger_name_str, "Status code returned null for command {command_string}.");
+                    return Err(())
+                }
+            };
+            if acceptable_status_codes.contains(&output_status_code) {
+                Ok(output_message)
+            } else {
+                let mut error_string = format!("The command {command_string} did not finish with expected status code.");
+                if output_message.len() > 0 {
+                    error_string = error_string + &format!("\nstdout was:\n{output_message}")
+                };
+                if output_error.len() > 0 {
+                    error_string = error_string + &format!("\nstderr was:\n{output_error}")
+                };
+                error!(target: logger_name_str, "{error_string}");
+                return Err(())
+            }
         }
-    }
-}
-
-fn get_command_stdout(command_output: Output, acceptable_status_codes: Vec<i32>, command_name: &str, project_name: &str) -> String {
-    let target_string = format!("ci-cd_worker::{project_name}");
-    let target_str = target_string.as_str();
-    let output_message = match String::from_utf8(command_output.stdout) {
-        Ok(output_string) => output_string
         , _ => {
-            error!(target: target_str, "Could not convert the stdout to string for command {command_name}.");
-            panic!()
+            error!(target: logger_name_str, "Creating output command for command {command_string}");
+            return Err(())
         }
-    };
-    let output_error = match String::from_utf8(command_output.stderr) {
-        Ok(output_string) => output_string
-        , _ => {
-            error!(target: target_str, "Could not convert the stderr to string for command {command_name}.");
-            panic!()
-        }
-    };
-    let output_status_code = match command_output.status.code() {
-        Some(code) => code
-        , _ => {
-            error!(target: target_str, "Status code returned null for command {command_name}.");
-            panic!()
-        }
-    };
-    if acceptable_status_codes.contains(&output_status_code) {
-        output_message
-    } else {
-        let mut error_string: String = format!("The command {command_name} did not finish successfully.");
-        if output_message.len() > 0 {
-            error_string = error_string + &format!("\nstdout was:\n{output_message}")
-        };
-        if output_error.len() > 0 {
-            error_string = error_string + &format!("\nstderr was:\n{output_error}")
-        };
-        error!(target: target_str, "{error_string}");
-        panic!()
     }
 }
 
 fn main() {
-    let config_file = File::open("/etc/ci-cd_worker/list_of_projects_to_update.yaml")
+    ///////// Parameters
+
+    let logger_config_file = "/etc/ci-cd_worker/list_of_projects_to_update.yaml";
+    let logs_root_location = "/var/log/cc_app_logs/ci-cd_worker/";
+    let main_log_file_name = "main.log";
+    let file_log_output_format = "{d(%Y-%m-%d %H:%M:%S %Z)(utc)} {l} {t} - {m}{n}";
+    let log_level = env::var("LOG_LEVEL").unwrap_or_else(|_| "3".to_string());
+    
+    ///////// Logger
+
+    let level_filter = match log_level.as_str() {
+        "0" => LevelFilter::Off,
+        "1" => LevelFilter::Error,
+        "2" => LevelFilter::Warn,
+        "3" => LevelFilter::Info,
+        "4" => LevelFilter::Debug,
+        "5" => LevelFilter::Trace,
+        _ => LevelFilter::Info, // Default to 'info' if the value is unrecognized
+    };
+
+    // Opening the logger yaml config file
+    let config_file = File::open(logger_config_file)
         .expect("Could not open the file with the run config");
+    // Loading the config into a Hashmap
     let run_config: HashMap<String, loop_config> = serde_yaml::from_reader(config_file)
         .expect("Could not deserialize config file content into loop config struct");
+    // Creating the main log appenders
     let stdout = ConsoleAppender::builder().build();
+    let log_file_appender = FileAppender::builder()
+        .encoder(Box::new(PatternEncoder::new(file_log_output_format)))
+        .build(format!("{logs_root_location}{main_log_file_name}"))
+        .expect(format!("Could not create the file appender").as_str());
+    // Starting the logger configuration by adding the console logger
     let mut incremental_logger_config = Config::builder()
-        .appender(Appender::builder().build("stdout", Box::new(stdout)));
-    for (project_name, &ref config) in run_config.iter() {
+        .appender(Appender::builder().build("stdout", Box::new(stdout)))
+        .appender(Appender::builder().build("main_log", Box::new(log_file_appender)));
+    // For every project that this code will manage we want to create an additional logger
+    for (project_name, _) in run_config.iter() {
+        // Setting the logger name based on the config file
         let logger_name = format!("ci-cd_worker::{project_name}");
         let logger_name_str = logger_name.as_str();
+        // Creating the file logger for for the project with a specific output format and location
         let file_appender = FileAppender::builder()
-            .encoder(Box::new(PatternEncoder::new("{d(%Y-%m-%d %H:%M:%S %Z)(utc)} {l} {t} - {m}{n}")))
-            .build(format!("/var/log/cc_app_logs/ci-cd_worker/{project_name}.log"))
-            .expect("Could not create the file appender for the {project_name} logger");
+            .encoder(Box::new(PatternEncoder::new(file_log_output_format)))
+            .build(format!("{logs_root_location}{project_name}.log"))
+            .expect(format!("Could not create the file appender for the {project_name} logger").as_str());
+        // Creates the appender for our new file and creates a new logger that used is together with the console logger
         incremental_logger_config = incremental_logger_config
             .appender(Appender::builder().build(project_name, Box::new(file_appender)))
             .logger(Logger::builder()
                 .appender("stdout")
                 .appender(project_name)
                 .additive(false)
-                .build(logger_name_str, LevelFilter::Info)
+                .build(logger_name_str, level_filter)
             )
     };
-    let logger_config = incremental_logger_config.build(Root::builder().appender("stdout").build(LevelFilter::Info))
+    let logger_config = incremental_logger_config.build(Root::builder()
+        .appender("stdout")
+        .appender("main_log")
+        .build(level_filter))
         .expect("Could not create the logger config");
-
-    // let handle = log4rs::init_config(logger_config).expect("Error when initializing the logger");
     log4rs::init_config(logger_config).expect("Error when initializing the logger");
+    
+    ///////// Main logic
+
     for (project_name, & ref config) in run_config.iter() {
         let logger_name = format!("ci-cd_worker::{project_name}");
         let logger_name_str = logger_name.as_str();
-        info!(target: logger_name_str, "Beginning update for project {project_name}.");
-        let _ = construct_command_and_get_output("git fetch --all", &config.source_code_path, project_name);
-        let git_status = construct_command_and_get_output("git status", &config.source_code_path, project_name);
-        let git_status_output = get_command_stdout(git_status, vec![0], "git status", project_name);
-        if !git_status_output.contains("Your branch is up to date") {
-            let _ = construct_command_and_get_output("git pull", &config.source_code_path, project_name);
-            info!(target: logger_name_str, "Pulled latest changes. Attempting to stop cron.");
+        debug!("Only for root logger");
+        debug!(target: logger_name_str, "Only for project logger");
+        debug!(target: logger_name_str, "Beginning update for project.");
+        let fetch_result = command_and_output(
+            "git fetch --all"
+            , &config.source_code_path
+            , vec![0]
+            , logger_name_str
+        );
+        let fetch = match fetch_result {
+            Ok(string) => string
+            , _ => continue
+        };
+        debug!(target: logger_name_str, "git fetch output: {fetch}");
+        let status_result = command_and_output(
+            "git status"
+            , &config.source_code_path
+            , vec![0]
+            , logger_name_str
+        );
+        let status = match status_result {
+            Ok(string) => string
+            , _ => continue
+        };
+        debug!(target: logger_name_str, "git status output: {status}");
+        if !status.contains("Your branch is up to date") {
+            let pull_result = command_and_output(
+                "git pull"
+                , &config.source_code_path
+                , vec![0]
+                , logger_name_str
+            );
+            let pull = match pull_result {
+                Ok(string) => string
+                , _ => continue
+            };
+            debug!(target: logger_name_str, "git pull output: {pull}");
             match &config.release_bin_storage_path {
                 Some(release_bin_storage_path) => {
-                    let _ = construct_command_and_get_output("sudo systemctl stop cron.service", &config.source_code_path, project_name);
-                    let cron_status_command = construct_command_and_get_output("sudo systemctl status cron.service", &config.source_code_path, project_name);
-                    let mut cron_status_output = get_command_stdout(cron_status_command, vec![0, 3], "cron status after shutting down", project_name);
+                    let cron_stop_result = command_and_output(
+                        "sudo systemctl stop cron.service"
+                        , &config.source_code_path
+                        , vec![0]
+                        , logger_name_str
+                    );
+                    let cron_stop = match cron_stop_result {
+                        Ok(string) => string
+                        , _ => continue
+                    };
+                    debug!(target: logger_name_str, "cron stop output: {cron_stop}");
+                    let cron_status_result = command_and_output(
+                        "sudo systemctl status cron.service"
+                        , &config.source_code_path
+                        , vec![0, 3]
+                        , logger_name_str
+                    );
+                    let mut cron_status = match cron_status_result {
+                        Ok(string) => string
+                        , _ => continue
+                    };
+                    debug!(target: logger_name_str, "cron status output: {cron_status}");
                     let loop_start_time = Instant::now();
-                    info!(target: logger_name_str, "Checking if cron has stopped.");
-                    while !cron_status_output.contains("Active: inactive (dead)")
+                    debug!(target: logger_name_str, "Checking if cron has stopped.");
+                    while !cron_status.contains("Active: inactive (dead)")
                     && loop_start_time.elapsed() < Duration::from_secs(5) {
                         sleep(Duration::from_secs_f32(0.5));
-                        let cron_status_command = construct_command_and_get_output("sudo systemctl status cron.service", &config.source_code_path, project_name);
-                        cron_status_output = get_command_stdout(cron_status_command, vec![0, 3], "cron status after shutting down", project_name);
+                        let cron_status_result = command_and_output(
+                            "sudo systemctl status cron.service"
+                            , &config.source_code_path
+                            , vec![0, 3]
+                            , logger_name_str
+                        );
+                        cron_status = match cron_status_result {
+                            Ok(string) => string
+                            , _ => continue
+                        };
+                        debug!(target: logger_name_str, "cron status output from withing checking loop: {cron_status}");
                     }
-                    if !cron_status_output.contains("Active: inactive (dead)") {
-                        error!(target: logger_name_str, "Could not stop service for project {project_name}.");
-                        panic!()
+                    if !cron_status.contains("Active: inactive (dead)") {
+                        error!(target: logger_name_str, "Could not stop service for project.");
+                        continue
                     }
-                    info!(target: logger_name_str, "Cron has stopped. Attempting build.");
-                    let _ = construct_command_and_get_output("cargo build --release", &config.source_code_path, project_name);
-                    info!(target: logger_name_str, "Build done. Attempting to move the binary to it's new home.");
-                    let binary_name_split = &config.source_code_path.split('/');
-                    let mut count = 0;
-                    let mut binary_name = "";
-                    for (i,elem) in binary_name_split.clone().enumerate() { count = i; binary_name = elem};
-                    count += 1;
-                    if count == 1 {
-                        error!("The source code path must be an absolute path.");
-                        panic!();
-                    }
+                    debug!(target: logger_name_str, "Cron has stopped. Attempting build.");
+                    let cargo_build_result = command_and_output(
+                        "cargo build --release"
+                        , &config.source_code_path
+                        , vec![0]
+                        , logger_name_str
+                    );
+                    let cargo_build = match cargo_build_result {
+                        Ok(string) => string
+                        , _ => continue
+                    };
+                    debug!(target: logger_name_str, "cargo build output: {cargo_build}");
+                    debug!(target: logger_name_str, "Build done. Attempting to move the binary to it's new home.");
+                    let binary_name_option = &config.source_code_path.split('/').last();
+                    let binary_name = match binary_name_option {
+                        Some(string) => string
+                        , _ => {
+                            error!(target: logger_name_str, "Binary name cannot be empty");
+                            continue
+                        }
+                    };
                     let move_command = format!("mv target/release/{binary_name} {release_bin_storage_path}/{project_name}");
-                    let move_command_str = move_command.as_str();
-                    let _ = construct_command_and_get_output(move_command_str, &config.source_code_path, project_name);
-                    info!(target: logger_name_str, "Move finished. Attempting to start cron.");
-                    let _ = construct_command_and_get_output("sudo systemctl start cron.service", &config.source_code_path, project_name);
-                    let cron_status_command = construct_command_and_get_output("sudo systemctl status cron.service", &config.source_code_path, project_name);
-                    let mut cron_status_output = get_command_stdout(cron_status_command, vec![0, 3], "cron status after shutting down", project_name);
+                    let move_result = command_and_output(
+                        move_command.as_str()
+                        , &config.source_code_path
+                        , vec![0]
+                        , logger_name_str
+                    );
+                    let move_op = match move_result {
+                        Ok(string) => string
+                        , _ => continue
+                    };
+                    debug!(target: logger_name_str, "move operation output: {move_op}");
+                    debug!(target: logger_name_str, "Move finished. Attempting to start cron.");
+                    let cron_start_result = command_and_output(
+                        "sudo systemctl start cron.service"
+                        , &config.source_code_path
+                        , vec![0]
+                        , logger_name_str
+                    );
+                    let cron_start = match cron_start_result {
+                        Ok(string) => string
+                        , _ => continue
+                    };
+                    debug!(target: logger_name_str, "cron start output: {cron_start}");
+                    let cron_status_result = command_and_output(
+                        "sudo systemctl status cron.service"
+                        , &config.source_code_path
+                        , vec![0, 3]
+                        , logger_name_str
+                    );
+                    let mut cron_status = match cron_status_result {
+                        Ok(string) => string
+                        , _ => continue
+                    };
+                    debug!(target: logger_name_str, "cron status output: {cron_status}");
                     let loop_start_time = Instant::now();
-                    info!(target: logger_name_str, "Checking if cron has started");
-                    while !cron_status_output.contains("Active: active (running)")
+                    debug!(target: logger_name_str, "Checking if cron has started");
+                    while !cron_status.contains("Active: active (running)")
                     && loop_start_time.elapsed() < Duration::from_secs(5) {
                         sleep(Duration::from_secs_f32(0.5));
-                        let cron_status_command = construct_command_and_get_output("sudo systemctl status cron.service", &config.source_code_path, project_name);
-                        cron_status_output = get_command_stdout(cron_status_command, vec![0, 3], "cron status after starting up", project_name);
+                        let cron_status_result = command_and_output(
+                            "sudo systemctl status cron.service"
+                            , &config.source_code_path
+                            , vec![0, 3]
+                            , logger_name_str
+                        );
+                        cron_status = match cron_status_result {
+                            Ok(string) => string
+                            , _ => continue
+                        };
+                        debug!(target: logger_name_str, "cron status output from within the loop: {cron_status}");
                     }
-                    if !cron_status_output.contains("Active: active (running)") {
-                        error!(target: logger_name_str, "Could not start cron for project. Failed at project {project_name}.");
+                    if !cron_status.contains("Active: active (running)") {
+                        error!(target: logger_name_str, "Could not start cron for project.");
                         panic!()
                     }
-                    info!(target: logger_name_str, "Cron has started. Project {project_name} updated successfully.");
                 }
-                , None => info!("No build requested. Project {project_name} updated successfully.")
+                , None => debug!(target: logger_name_str, "No build requested. Project updated successfully.")
             };
+            info!(target: logger_name_str, "Project was updated.")
         } else {
-            info!(target: logger_name_str, "Nothing to pull for project {project_name}.")
+            info!(target: logger_name_str, "Nothing to pull for project.")
         }
     }
 }
