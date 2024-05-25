@@ -72,6 +72,49 @@ fn command_and_output(
     }
 }
 
+fn check_cron_status(desired_status: &str) -> () {
+    let cron_status_result = command_and_output(
+        "sudo systemctl status cron.service"
+        , "/"
+        , vec![0, 3]
+        , "root"
+    );
+    let mut cron_status = match cron_status_result {
+        Ok(string) => string
+        , _ => {
+            let err_message = "Could not check the status of cron".to_string();
+            error!("{err_message}");
+            panic!("{err_message}")
+        }
+    };
+    debug!("cron status output:\n{cron_status}");
+    let loop_start_time = Instant::now();
+    while !cron_status.contains(desired_status)
+    && loop_start_time.elapsed() < Duration::from_secs(5) {
+        sleep(Duration::from_secs_f32(0.5));
+        let cron_status_result = command_and_output(
+            "sudo systemctl status cron.service"
+            , "/"
+            , vec![0, 3]
+            , "root"
+        );
+        cron_status = match cron_status_result {
+            Ok(string) => string
+            , _ => {
+                let err_message = "Could not check the status of cron from within the loop".to_string();
+                error!("{err_message}");
+                panic!("{err_message}")
+            }
+        };
+        debug!("cron status output from withing checking loop:\n{cron_status}");
+    }
+    if !cron_status.contains(desired_status) {
+        let err_message = "Cron not stopped after successful command".to_string();
+        error!("{err_message}");
+        panic!("{err_message}")
+    }
+}
+
 fn main() {
     ///////// Parameters
 
@@ -135,7 +178,24 @@ fn main() {
     log4rs::init_config(logger_config).expect("Error when initializing the logger");
     
     ///////// Main logic
-
+    // Stopping cron
+    let cron_stop_result = command_and_output(
+        "sudo systemctl stop cron.service"
+        , "/"
+        , vec![0]
+        , "root"
+    );
+    let _ = match cron_stop_result {
+        Ok(string) => string
+        , _ => {
+            let err_message = "Could not stop cron".to_string();
+            error!("{err_message}");
+            panic!("{err_message}")
+        }
+    };
+    debug!("Checking if cron has stopped.");
+    check_cron_status("Active: inactive (dead)");
+    // Updating projects
     for (project_name, & ref config) in run_config.iter() {
         let logger_name = format!("ci-cd_worker::{project_name}");
         let logger_name_str = logger_name.as_str();
@@ -176,50 +236,6 @@ fn main() {
             debug!(target: logger_name_str, "git pull output\n{pull}");
             match &config.release_bin_storage_path {
                 Some(release_bin_storage_path) => {
-                    let cron_stop_result = command_and_output(
-                        "sudo systemctl stop cron.service"
-                        , &config.source_code_path
-                        , vec![0]
-                        , logger_name_str
-                    );
-                    let cron_stop = match cron_stop_result {
-                        Ok(string) => string
-                        , _ => continue
-                    };
-                    debug!(target: logger_name_str, "cron stop output:\n{cron_stop}");
-                    let cron_status_result = command_and_output(
-                        "sudo systemctl status cron.service"
-                        , &config.source_code_path
-                        , vec![0, 3]
-                        , logger_name_str
-                    );
-                    let mut cron_status = match cron_status_result {
-                        Ok(string) => string
-                        , _ => continue
-                    };
-                    debug!(target: logger_name_str, "cron status output:\n{cron_status}");
-                    let loop_start_time = Instant::now();
-                    debug!(target: logger_name_str, "Checking if cron has stopped.");
-                    while !cron_status.contains("Active: inactive (dead)")
-                    && loop_start_time.elapsed() < Duration::from_secs(5) {
-                        sleep(Duration::from_secs_f32(0.5));
-                        let cron_status_result = command_and_output(
-                            "sudo systemctl status cron.service"
-                            , &config.source_code_path
-                            , vec![0, 3]
-                            , logger_name_str
-                        );
-                        cron_status = match cron_status_result {
-                            Ok(string) => string
-                            , _ => continue
-                        };
-                        debug!(target: logger_name_str, "cron status output from withing checking loop:\n{cron_status}");
-                    }
-                    if !cron_status.contains("Active: inactive (dead)") {
-                        error!(target: logger_name_str, "Could not stop service for project.");
-                        continue
-                    }
-                    debug!(target: logger_name_str, "Cron has stopped. Attempting build.");
                     let cargo_build_result = command_and_output(
                         "cargo build --release"
                         , &config.source_code_path
@@ -253,49 +269,6 @@ fn main() {
                     };
                     debug!(target: logger_name_str, "move operation output:\n{move_op}");
                     debug!(target: logger_name_str, "Move finished. Attempting to start cron.");
-                    let cron_start_result = command_and_output(
-                        "sudo systemctl start cron.service"
-                        , &config.source_code_path
-                        , vec![0]
-                        , logger_name_str
-                    );
-                    let cron_start = match cron_start_result {
-                        Ok(string) => string
-                        , _ => continue
-                    };
-                    debug!(target: logger_name_str, "cron start output:\n{cron_start}");
-                    let cron_status_result = command_and_output(
-                        "sudo systemctl status cron.service"
-                        , &config.source_code_path
-                        , vec![0, 3]
-                        , logger_name_str
-                    );
-                    let mut cron_status = match cron_status_result {
-                        Ok(string) => string
-                        , _ => continue
-                    };
-                    debug!(target: logger_name_str, "cron status output:\n{cron_status}");
-                    let loop_start_time = Instant::now();
-                    debug!(target: logger_name_str, "Checking if cron has started");
-                    while !cron_status.contains("Active: active (running)")
-                    && loop_start_time.elapsed() < Duration::from_secs(5) {
-                        sleep(Duration::from_secs_f32(0.5));
-                        let cron_status_result = command_and_output(
-                            "sudo systemctl status cron.service"
-                            , &config.source_code_path
-                            , vec![0, 3]
-                            , logger_name_str
-                        );
-                        cron_status = match cron_status_result {
-                            Ok(string) => string
-                            , _ => continue
-                        };
-                        debug!(target: logger_name_str, "cron status output from within the loop:\n{cron_status}");
-                    }
-                    if !cron_status.contains("Active: active (running)") {
-                        error!(target: logger_name_str, "Could not start cron for project.");
-                        panic!()
-                    }
                 }
                 , None => debug!(target: logger_name_str, "No build requested. Project updated successfully.")
             };
@@ -304,4 +277,20 @@ fn main() {
             info!(target: logger_name_str, "Nothing to pull for project.")
         }
     }
+    let cron_start_result = command_and_output(
+        "sudo systemctl start cron.service"
+        , "/"
+        , vec![0]
+        , "root"
+    );
+    let _ = match cron_start_result {
+        Ok(string) => string
+        , _ => {
+            let err_message = "Could not start cron".to_string();
+            error!("{err_message}");
+            panic!("{err_message}")
+        }
+    };
+    debug!("Checking if cron has started.");
+    check_cron_status("Active: active (running)");
 }
