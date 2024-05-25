@@ -139,8 +139,6 @@ fn main() {
     for (project_name, & ref config) in run_config.iter() {
         let logger_name = format!("ci-cd_worker::{project_name}");
         let logger_name_str = logger_name.as_str();
-        debug!("Only for root logger");
-        debug!(target: logger_name_str, "Only for project logger");
         debug!(target: logger_name_str, "Beginning update for project.");
         let fetch_result = command_and_output(
             "git fetch --all"
@@ -152,7 +150,7 @@ fn main() {
             Ok(string) => string
             , _ => continue
         };
-        debug!(target: logger_name_str, "git fetch output: {fetch}");
+        debug!(target: logger_name_str, "git fetch output:\n{fetch}");
         let status_result = command_and_output(
             "git status"
             , &config.source_code_path
@@ -163,7 +161,7 @@ fn main() {
             Ok(string) => string
             , _ => continue
         };
-        debug!(target: logger_name_str, "git status output: {status}");
+        debug!(target: logger_name_str, "git status output:\n{status}");
         if !status.contains("Your branch is up to date") {
             let pull_result = command_and_output(
                 "git pull"
@@ -175,7 +173,7 @@ fn main() {
                 Ok(string) => string
                 , _ => continue
             };
-            debug!(target: logger_name_str, "git pull output: {pull}");
+            debug!(target: logger_name_str, "git pull output\n{pull}");
             match &config.release_bin_storage_path {
                 Some(release_bin_storage_path) => {
                     let cron_stop_result = command_and_output(
@@ -188,7 +186,7 @@ fn main() {
                         Ok(string) => string
                         , _ => continue
                     };
-                    debug!(target: logger_name_str, "cron stop output: {cron_stop}");
+                    debug!(target: logger_name_str, "cron stop output:\n{cron_stop}");
                     let cron_status_result = command_and_output(
                         "sudo systemctl status cron.service"
                         , &config.source_code_path
@@ -199,7 +197,7 @@ fn main() {
                         Ok(string) => string
                         , _ => continue
                     };
-                    debug!(target: logger_name_str, "cron status output: {cron_status}");
+                    debug!(target: logger_name_str, "cron status output:\n{cron_status}");
                     let loop_start_time = Instant::now();
                     debug!(target: logger_name_str, "Checking if cron has stopped.");
                     while !cron_status.contains("Active: inactive (dead)")
@@ -215,7 +213,7 @@ fn main() {
                             Ok(string) => string
                             , _ => continue
                         };
-                        debug!(target: logger_name_str, "cron status output from withing checking loop: {cron_status}");
+                        debug!(target: logger_name_str, "cron status output from withing checking loop:\n{cron_status}");
                     }
                     if !cron_status.contains("Active: inactive (dead)") {
                         error!(target: logger_name_str, "Could not stop service for project.");
@@ -232,7 +230,7 @@ fn main() {
                         Ok(string) => string
                         , _ => continue
                     };
-                    debug!(target: logger_name_str, "cargo build output: {cargo_build}");
+                    debug!(target: logger_name_str, "cargo build output:\n{cargo_build}");
                     debug!(target: logger_name_str, "Build done. Attempting to move the binary to it's new home.");
                     let binary_name_option = &config.source_code_path.split('/').last();
                     let binary_name = match binary_name_option {
@@ -253,7 +251,7 @@ fn main() {
                         Ok(string) => string
                         , _ => continue
                     };
-                    debug!(target: logger_name_str, "move operation output: {move_op}");
+                    debug!(target: logger_name_str, "move operation output:\n{move_op}");
                     debug!(target: logger_name_str, "Move finished. Attempting to start cron.");
                     let cron_start_result = command_and_output(
                         "sudo systemctl start cron.service"
@@ -265,7 +263,7 @@ fn main() {
                         Ok(string) => string
                         , _ => continue
                     };
-                    debug!(target: logger_name_str, "cron start output: {cron_start}");
+                    debug!(target: logger_name_str, "cron start output:\n{cron_start}");
                     let cron_status_result = command_and_output(
                         "sudo systemctl status cron.service"
                         , &config.source_code_path
@@ -276,7 +274,7 @@ fn main() {
                         Ok(string) => string
                         , _ => continue
                     };
-                    debug!(target: logger_name_str, "cron status output: {cron_status}");
+                    debug!(target: logger_name_str, "cron status output:\n{cron_status}");
                     let loop_start_time = Instant::now();
                     debug!(target: logger_name_str, "Checking if cron has started");
                     while !cron_status.contains("Active: active (running)")
@@ -292,7 +290,7 @@ fn main() {
                             Ok(string) => string
                             , _ => continue
                         };
-                        debug!(target: logger_name_str, "cron status output from within the loop: {cron_status}");
+                        debug!(target: logger_name_str, "cron status output from within the loop:\n{cron_status}");
                     }
                     if !cron_status.contains("Active: active (running)") {
                         error!(target: logger_name_str, "Could not start cron for project.");
