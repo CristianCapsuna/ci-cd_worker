@@ -40,6 +40,7 @@ fn command_and_output(
         command.arg(elem);
     };
     command.current_dir(project_location);
+    debug!("{project_location}");
     match command.output() {
         Ok(output) => {
             let output_message = String::from_utf8(output.stdout).expect("Terminal output is always valid utf8");
@@ -65,8 +66,9 @@ fn command_and_output(
                 return Err(())
             }
         }
-        , _ => {
-            error!(target: logger_name_str, "Creating output command for command {command_string}");
+        , Err(error) => {
+            error!(target: logger_name_str, "Creating output for command {command_string}");
+            debug!(target: logger_name_str, "{}", error);
             return Err(())
         }
     }
