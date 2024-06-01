@@ -67,8 +67,8 @@ fn command_and_output(
             }
         }
         , Err(error) => {
-            error!(target: logger_name_str, "Creating output for command {command_string} \
-                . Error was:\n{error}");
+            error!(target: logger_name_str, "Creating output for command {command_string}. \
+                Error was:\n{error}");
             return Err(error.to_string())
         }
     }
@@ -123,7 +123,11 @@ fn get_current_commit_hash(project_location: &str, logger_name: &str) -> Result<
         , project_location
         , vec![0]
         , logger_name)?;
-    let string_iterator = git_log.split(" ");
+    let commit_line = match git_log.split("\n").next() {
+        Some(string) => string
+        , None => ""
+    };
+    let string_iterator = commit_line.split(" ");
     let mut commit_hash = "";
     for (index, section) in string_iterator.enumerate() {
         if index == 1 {
@@ -131,14 +135,7 @@ fn get_current_commit_hash(project_location: &str, logger_name: &str) -> Result<
             break
         }
     };
-    match commit_hash {
-        "" => {
-            error!(target: logger_name, "Could not find commit hash");
-            return Err("Could not find commit hash".to_string())
-        }
-        , _ => return Ok(commit_hash.to_string())
-    }
-    
+    Ok(commit_hash.to_string())
 }
 
 fn main() {
