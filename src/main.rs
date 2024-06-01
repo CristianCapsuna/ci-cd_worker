@@ -25,7 +25,7 @@ fn command_and_output(
     , project_location: &str
     , acceptable_status_codes: Vec<i32>
     , logger_name_str: &str
-) -> Result<String, ()> {
+) -> Result<String, String> {
     let mut command_string_split = command_string.split(' ');
     let command = match command_string_split.next() {
         Some(string) => string
@@ -40,16 +40,15 @@ fn command_and_output(
         command.arg(elem);
     };
     command.current_dir(project_location);
-    debug!("{project_location}");
     match command.output() {
         Ok(output) => {
             let output_message = String::from_utf8(output.stdout).expect("Terminal output is always valid utf8");
             let output_error = String::from_utf8(output.stderr).expect("Terminal output is always valid utf8");
             let output_status_code = match output.status.code() {
                 Some(code) => code
-                , _ => {
+                , None => {
                     error!(target: logger_name_str, "Status code returned null for command {command_string}.");
-                    return Err(())
+                    return Err("Could not retrieve status code from command".to_string())
                 }
             };
             if acceptable_status_codes.contains(&output_status_code) {
@@ -63,13 +62,13 @@ fn command_and_output(
                     error_string = error_string + &format!("\nstderr was:\n{output_error}")
                 };
                 error!(target: logger_name_str, "{error_string}");
-                return Err(())
+                return Err(error_string)
             }
         }
         , Err(error) => {
-            error!(target: logger_name_str, "Creating output for command {command_string}");
-            debug!(target: logger_name_str, "{}", error);
-            return Err(())
+            error!(target: logger_name_str, "Creating output for command {command_string}
+                . Error was:\n{error}");
+            return Err(error.to_string())
         }
     }
 }
@@ -115,6 +114,30 @@ fn check_cron_status(desired_status: &str) -> () {
         error!("{err_message}");
         panic!("{err_message}")
     }
+}
+
+fn get_current_commit_hash(project_location: &str, logger_name: &str) -> Result<String, String> {
+    let git_log = command_and_output(
+        "git log"
+        , project_location
+        , vec![0]
+        , logger_name)?;
+    let string_iterator = git_log.split(" ");
+    let mut commit_hash = "";
+    for (index, section) in string_iterator.enumerate() {
+        if index == 1 {
+            commit_hash = section;
+            break
+        }
+    };
+    match commit_hash {
+        "" => {
+            error!(target: logger_name, "Could not find commit hash");
+            return Err("Could not find commit hash".to_string())
+        }
+        , _ => return Ok(commit_hash.to_string())
+    }
+    
 }
 
 fn main() {
@@ -202,72 +225,109 @@ fn main() {
         let logger_name = format!("ci-cd_worker::{project_name}");
         let logger_name_str = logger_name.as_str();
         debug!(target: logger_name_str, "Beginning update for project.");
-        let fetch_result = command_and_output(
+        let fetch = match command_and_output(
             "git fetch --all"
             , &config.source_code_path
             , vec![0]
             , logger_name_str
-        );
-        let fetch = match fetch_result {
+        ) {
             Ok(string) => string
             , _ => continue
         };
         debug!(target: logger_name_str, "git fetch output:\n{fetch}");
-        let status_result = command_and_output(
+        let status = match command_and_output(
             "git status"
             , &config.source_code_path
             , vec![0]
             , logger_name_str
-        );
-        let status = match status_result {
+        ) {
             Ok(string) => string
             , _ => continue
         };
         debug!(target: logger_name_str, "git status output:\n{status}");
         if !status.contains("Your branch is up to date") {
-            let pull_result = command_and_output(
+            let current_commit_hash = match get_current_commit_hash(
+                &config.source_code_path
+                , logger_name_str
+            ) {
+                Ok(string) => string
+                , _ => continue
+            };
+            let reset_command_string = format!("git reset --hard {current_commit_hash}");
+            let reset_command = reset_command_string.as_str();
+            let pull = match command_and_output(
                 "git pull"
                 , &config.source_code_path
                 , vec![0]
                 , logger_name_str
-            );
-            let pull = match pull_result {
+            ) {
                 Ok(string) => string
                 , _ => continue
             };
             debug!(target: logger_name_str, "git pull output\n{pull}");
             match &config.release_bin_storage_path {
                 Some(release_bin_storage_path) => {
-                    let cargo_build_result = command_and_output(
+                    let cargo_build = match command_and_output(
                         "cargo build --release"
                         , &config.source_code_path
                         , vec![0]
                         , logger_name_str
-                    );
-                    let cargo_build = match cargo_build_result {
+                    ) {
                         Ok(string) => string
-                        , _ => continue
-                    };
-                    debug!(target: logger_name_str, "cargo build output:\n{cargo_build}");
-                    debug!(target: logger_name_str, "Build done. Attempting to move the binary to it's new home.");
-                    let binary_name_option = &config.source_code_path.split('/').last();
-                    let binary_name = match binary_name_option {
-                        Some(string) => string
                         , _ => {
-                            error!(target: logger_name_str, "Binary name cannot be empty");
+                            let _ = match command_and_output(
+                                reset_command
+                                , &config.source_code_path
+                                , vec![0]
+                                , logger_name_str
+                            ) {
+                                Ok(string) => string
+                                , _ => continue
+                            };
                             continue
                         }
                     };
-                    let move_command = format!("mv target/release/{binary_name} {release_bin_storage_path}/{project_name}");
-                    let move_result = command_and_output(
-                        move_command.as_str()
+                    debug!(target: logger_name_str, "cargo build output:\n{cargo_build}");
+                    debug!(target: logger_name_str, "Build done. Attempting to move the binary to it's new home.");
+                    let binary_name = match config.source_code_path.split('/').last() {
+                        Some(string) => string
+                        , _ => {
+                            error!(target: logger_name_str, "Binary name cannot be empty");
+                            let _ = match command_and_output(
+                                reset_command
+                                , &config.source_code_path
+                                , vec![0]
+                                , logger_name_str
+                            ) {
+                                Ok(string) => string
+                                , _ => continue
+                            };
+                            continue
+                        }
+                    };
+                    let move_command_string = format!(
+                        "mv target/release/{binary_name} {release_bin_storage_path}/{project_name}"
+                    );
+                    let move_command = move_command_string.as_str();
+                    let move_op = match command_and_output(
+                        move_command
                         , &config.source_code_path
                         , vec![0]
                         , logger_name_str
-                    );
-                    let move_op = match move_result {
+                    ) {
                         Ok(string) => string
-                        , _ => continue
+                        , _ => {
+                            let _ = match command_and_output(
+                                reset_command
+                                , &config.source_code_path
+                                , vec![0]
+                                , logger_name_str
+                            ) {
+                                Ok(string) => string
+                                , _ => continue
+                            };
+                            continue
+                        }
                     };
                     debug!(target: logger_name_str, "move operation output:\n{move_op}");
                     debug!(target: logger_name_str, "Move finished. Attempting to start cron.");
@@ -279,13 +339,12 @@ fn main() {
             info!(target: logger_name_str, "Nothing to pull for project.")
         }
     }
-    let cron_start_result = command_and_output(
+    let _ = match command_and_output(
         "sudo systemctl start cron.service"
         , "/"
         , vec![0]
         , "root"
-    );
-    let _ = match cron_start_result {
+    ) {
         Ok(string) => string
         , _ => {
             let err_message = "Could not start cron".to_string();
