@@ -67,7 +67,7 @@ fn command_and_output(
             }
         }
         , Err(error) => {
-            error!(target: logger_name_str, "Creating output for command {command_string}
+            error!(target: logger_name_str, "Creating output for command {command_string} \
                 . Error was:\n{error}");
             return Err(error.to_string())
         }
