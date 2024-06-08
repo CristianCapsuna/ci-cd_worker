@@ -4,6 +4,7 @@ use std::{
     , time::Duration
     , thread::sleep
     , fs::File
+    , fs::remove_file
     , collections::HashMap
     , time::Instant
 };
@@ -71,49 +72,6 @@ fn command_and_output(
                 Error was:\n{error}");
             return Err(error.to_string())
         }
-    }
-}
-
-fn check_cron_status(desired_status: &str) -> () {
-    let cron_status_result = command_and_output(
-        "sudo systemctl status cron.service"
-        , "/"
-        , vec![0, 3]
-        , "root"
-    );
-    let mut cron_status = match cron_status_result {
-        Ok(string) => string
-        , _ => {
-            let err_message = "Could not check the status of cron".to_string();
-            error!("{err_message}");
-            panic!("{err_message}")
-        }
-    };
-    debug!("cron status output:\n{cron_status}");
-    let loop_start_time = Instant::now();
-    while !cron_status.contains(desired_status)
-    && loop_start_time.elapsed() < Duration::from_secs(5) {
-        sleep(Duration::from_secs_f32(0.5));
-        let cron_status_result = command_and_output(
-            "sudo systemctl status cron.service"
-            , "/"
-            , vec![0, 3]
-            , "root"
-        );
-        cron_status = match cron_status_result {
-            Ok(string) => string
-            , _ => {
-                let err_message = "Could not check the status of cron from within the loop".to_string();
-                error!("{err_message}");
-                panic!("{err_message}")
-            }
-        };
-        debug!("cron status output from withing checking loop:\n{cron_status}");
-    }
-    if !cron_status.contains(desired_status) {
-        let err_message = "Cron not stopped after successful command".to_string();
-        error!("{err_message}");
-        panic!("{err_message}")
     }
 }
 
@@ -202,22 +160,6 @@ fn main() {
     
     ///////// Main logic
     // Stopping cron
-    let cron_stop_result = command_and_output(
-        "sudo systemctl stop cron.service"
-        , "/"
-        , vec![0]
-        , "root"
-    );
-    let _ = match cron_stop_result {
-        Ok(string) => string
-        , _ => {
-            let err_message = "Could not stop cron".to_string();
-            error!("{err_message}");
-            panic!("{err_message}")
-        }
-    };
-    debug!("Checking if cron has stopped.");
-    check_cron_status("Active: inactive (dead)");
     // Updating projects
     for (project_name, & ref config) in run_config.iter() {
         let logger_name = format!("ci-cd_worker::{project_name}");
@@ -307,6 +249,24 @@ fn main() {
                         "mv target/release/{binary_name} {release_bin_storage_path}/{project_name}"
                     );
                     let move_command = move_command_string.as_str();
+                    let mut lock_acquired = false;
+                    let lock_file_name = format!("{release_bin_storage_path}/{project_name}.lock");
+                    let loop_start_time = Instant::now();
+                    while lock_acquired == false && loop_start_time.elapsed() < Duration::from_secs(5) {
+                        let lock_file = File::create_new(&lock_file_name);
+                        lock_acquired = match lock_file {
+                            Ok(_) => true
+                            , Err(_) => {
+                                sleep(Duration::from_secs_f32(0.5));
+                                false
+                            }
+                        }
+                    }
+                    if lock_acquired == false {
+                        error!(target: logger_name_str, "Lock file could not be create for project {project_name} since it is already\
+                        present and did not disappear within 5 seconds of the program start");
+                        continue
+                    }
                     let move_op = match command_and_output(
                         move_command
                         , &config.source_code_path
@@ -327,6 +287,24 @@ fn main() {
                             continue
                         }
                     };
+                    let mut lock_released = false;
+                    let loop_start_time = Instant::now();
+                    while lock_released == false && loop_start_time.elapsed() < Duration::from_secs(5) {
+                        let lock_file_removal = remove_file(&lock_file_name);
+                        lock_released = match lock_file_removal {
+                            Ok(_) => true
+                            , Err(_) => {
+                                sleep(Duration::from_secs_f32(0.5));
+                                false
+                            }
+                        }
+
+                    }
+                    if lock_released == false {
+                        error!(target: logger_name_str, "Lock file could not be released for project\
+                        {project_name} within 5 seconds alloted");
+                        continue
+                    }
                     debug!(target: logger_name_str, "move operation output:\n{move_op}");
                     debug!(target: logger_name_str, "Move finished. Attempting to start cron.");
                 }
@@ -337,19 +315,4 @@ fn main() {
             info!(target: logger_name_str, "Nothing to pull for project.")
         }
     }
-    let _ = match command_and_output(
-        "sudo systemctl start cron.service"
-        , "/"
-        , vec![0]
-        , "root"
-    ) {
-        Ok(string) => string
-        , _ => {
-            let err_message = "Could not start cron".to_string();
-            error!("{err_message}");
-            panic!("{err_message}")
-        }
-    };
-    debug!("Checking if cron has started.");
-    check_cron_status("Active: active (running)");
 }
