@@ -38,9 +38,10 @@ fn command_and_output(
         }
     };
     let mut command = Command::new(command);
-    for elem in command_string_split {
-        command.arg(elem);
-    };
+    command.args(command_string_split);
+    // for elem in command_string_split {
+    //     command.arg(elem);
+    // };
     command.current_dir(project_location);
     match command.output() {
         Ok(output) => {
