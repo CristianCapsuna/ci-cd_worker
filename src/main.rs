@@ -34,14 +34,11 @@ fn command_and_output(
         , None => {
             let err_message = "Empty command was given".to_string();
             error!(target: logger_name_str, "{err_message}");
-            panic!("{err_message}")
+            return Err(err_message)
         }
     };
     let mut command = Command::new(command);
     command.args(command_string_split);
-    // for elem in command_string_split {
-    //     command.arg(elem);
-    // };
     command.current_dir(project_location);
     match command.output() {
         Ok(output) => {
@@ -50,8 +47,9 @@ fn command_and_output(
             let output_status_code = match output.status.code() {
                 Some(code) => code
                 , None => {
-                    error!(target: logger_name_str, "Status code returned null for command {command_string}.");
-                    return Err("Could not retrieve status code from command".to_string())
+                    let err_message = format!("Status code returned null for command {command_string}");
+                    error!(target: logger_name_str, "{err_message}");
+                    return Err(err_message)
                 }
             };
             if acceptable_status_codes.contains(&output_status_code) {
@@ -82,18 +80,8 @@ fn get_current_commit_hash(project_location: &str, logger_name: &str) -> Result<
         , project_location
         , vec![0]
         , logger_name)?;
-    let commit_line = match git_log.split("\n").next() {
-        Some(string) => string
-        , None => ""
-    };
-    let string_iterator = commit_line.split(" ");
-    let mut commit_hash = "";
-    for (index, section) in string_iterator.enumerate() {
-        if index == 1 {
-            commit_hash = section;
-            break
-        }
-    };
+    let commit_line = git_log.split("\n").next().unwrap_or("");
+    let commit_hash = commit_line.split(" ").nth(1).unwrap_or("");
     Ok(commit_hash.to_string())
 }
 
